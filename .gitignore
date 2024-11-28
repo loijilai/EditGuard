@@ -1,5 +1,5 @@
-**/__pycache__/
-/checkpoints
-/dataset/
-/results/
+__pycache__/
+checkpoints/
+dataset/
+results/
 indices.txt

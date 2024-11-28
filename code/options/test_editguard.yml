@@ -15,7 +15,7 @@ noisesigma: 1
 addjpeg: False
 jpegfactor: 70
 addpossion: False
-sdinpaint: True
+sdinpaint: False
 controlnetinpaint: False
 sdxl: False
 repaint: False
