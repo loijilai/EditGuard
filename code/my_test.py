@@ -13,13 +13,15 @@ from models import create_model
 
 # my imports
 import numpy as np
-import models.networks as networks
 import logging
 from collections import OrderedDict
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel, DataParallel
 from models.modules.Quantization import Quantization
 from utils.JPEG import DiffJPEG
+from models.modules.Inv_arch import InvNN, PredictiveModuleMIMO_prompt, DW_Encoder, DW_Decoder
+import math
+from models.modules.Subnet_constructor import subnet
 
 
 def dwt_init(x):
@@ -73,6 +75,80 @@ class IWT(nn.Module):
 
     def forward(self, x):
         return iwt_init(x)
+
+class VSN(nn.Module):
+    def __init__(self, opt, subnet_constructor=None, subnet_constructor_v2=None, down_num=2):
+        super(VSN, self).__init__()
+        self.model = opt['model']
+        self.mode = opt['mode']
+        opt_net = opt['network_G']
+        self.num_image = opt['num_image']
+        self.gop = opt['gop']
+        self.channel_in = opt_net['in_nc'] * self.gop
+        self.channel_out = opt_net['out_nc'] * self.gop
+        self.channel_in_hi = opt_net['in_nc'] * self.gop
+        self.channel_in_ho = opt_net['in_nc'] * self.gop
+        self.message_len = opt['message_length']
+
+        self.block_num = opt_net['block_num']
+        self.block_num_rbm = opt_net['block_num_rbm']
+        self.block_num_trans = opt_net['block_num_trans']
+        self.nf = self.channel_in_hi 
+        
+        # self.bitencoder = DW_Encoder(self.message_len, attention = "se")
+        # self.bitdecoder = DW_Decoder(self.message_len, attention = "se")
+        self.irn = InvNN(self.channel_in_ho, self.channel_in_hi, subnet_constructor, subnet_constructor_v2, self.block_num, down_num, groups=self.num_image)
+
+        if opt['prompt']:
+            self.pm = PredictiveModuleMIMO_prompt(self.channel_in_ho, self.nf* self.num_image, opt['prompt_len'], block_num_rbm=self.block_num_rbm, block_num_trans=self.block_num_trans)
+        # else:
+        #     self.pm = PredictiveModuleMIMO(self.channel_in_ho, self.nf* self.num_image, opt['prompt_len'], block_num_rbm=self.block_num_rbm, block_num_trans=self.block_num_trans)
+        #     self.BitPM = PredictiveModuleBit(3, 4, block_num_rbm=4, block_num_trans=2)
+
+
+    def forward(self, x, x_h=None, message=None, rev=False, hs=[], direction='f'):
+        if not rev:
+            if self.mode == "image":
+                out_y, out_y_h = self.irn(x, x_h, rev)
+                out_y = iwt(out_y)
+                # encoded_image = self.bitencoder(out_y, message)          
+                encoded_image = out_y
+                return out_y, encoded_image
+            
+            elif self.mode == "bit":
+                out_y = iwt(x)
+                encoded_image = self.bitencoder(out_y, message)            
+                return out_y, encoded_image
+
+        else:
+            if self.mode == "image":
+                # recmessage = self.bitdecoder(x)
+                recmessage = torch.Tensor(np.random.choice([-0.5, 0.5], (1, 64))).to('cuda')
+
+                x = dwt(x)
+                out_z = self.pm(x).unsqueeze(1)
+                out_z_new = out_z.view(-1, self.num_image, self.channel_in, x.shape[-2], x.shape[-1])
+                out_z_new = [out_z_new[:,i] for i in range(self.num_image)]
+                out_x, out_x_h = self.irn(x, out_z_new, rev)
+
+                return out_x, out_x_h, out_z, recmessage
+            
+            elif self.mode == "bit":
+                recmessage = self.bitdecoder(x)
+                return recmessage
+
+def define_G_v2(opt):
+    opt_net = opt['network_G']
+    which_model = opt_net['which_model_G']
+    subnet_type = which_model['subnet_type']
+    opt_datasets = opt['datasets']
+    down_num = int(math.log(opt_net['scale'], 2))
+    if opt['num_image'] == 1:
+        netG = VSN(opt, subnet(subnet_type, 'xavier'), subnet(subnet_type, 'xavier'), down_num)
+    else:
+        netG = VSN(opt, subnet(subnet_type, 'xavier'), subnet(subnet_type, 'xavier_v2'), down_num)
+
+    return netG
 
 class BaseModel():
     def __init__(self, opt):
@@ -159,6 +235,8 @@ class BaseModel():
         load_net = torch.load(load_path)
         load_net_clean = OrderedDict()  # remove unnecessary 'module.'
         for k, v in load_net.items():
+            if k.startswith('bitencoder.') or k.startswith('bitdecoder.'):
+                continue
             if k.startswith('module.'):
                 load_net_clean[k[7:]] = v
             else:
@@ -208,7 +286,7 @@ class Model_VSN(BaseModel):
         self.mode = opt["mode"]
         self.idxx = 0
 
-        self.netG = networks.define_G_v2(opt).to(self.device)
+        self.netG = define_G_v2(opt).to(self.device)
         if opt['dist']:
             self.netG = DistributedDataParallel(self.netG, device_ids=[torch.cuda.current_device()])
         else:
