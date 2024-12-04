@@ -5,7 +5,7 @@ use_tb_logger: true
 model: MIMO-VRN-h
 distortion: sr
 scale: 4
-gpu_ids: [0, 1, 2, 3]
+gpu_ids: [0]
 gop: 1
 num_image: 1
 
@@ -40,16 +40,16 @@ datasets:
     interval_list: [1]
     random_reverse: false
     border_mode: false
-    data_path: /userhome/train2017
-    txt_path: /userhome/train2017.txt
+    data_path: /home/lai/Research/Graduate/EditGuard/dataset/examples
+    txt_path: /home/lai/Research/Graduate/EditGuard/dataset/testlist.txt
     dataroot_LQ: ~/vimeo90k/vimeo90k_train_LR7frames.lmdb
     cache_keys: Vimeo90K_train_keys.pkl
     num_image: 1
 
     N_frames: 7
     use_shuffle: true
-    n_workers: 24 
-    batch_size: 4
+    n_workers: 8
+    batch_size: 1
     GT_size: 400
     LQ_size: 36
     use_flip: true
@@ -60,8 +60,8 @@ datasets:
     num_image: 1
     name: CoCo
     mode: test
-    data_path: ../dataset/valAGE-Set
-    txt_path: ../dataset/sep_vallist.txt
+    data_path: /home/lai/Research/Graduate/EditGuard/dataset/examples
+    txt_path: /home/lai/Research/Graduate/EditGuard/dataset/testlist.txt
 
     N_frames: 1
     padding: 'new_info'
@@ -84,7 +84,7 @@ network_G:
 #### path
 
 path:
-  pretrain_model_G: 
+  pretrain_model_G: /home/lai/Research/Graduate/EditGuard/experiments/train_ibsn_bit_64/models/latest_G.pth
   models: ckp/base
   strict_load: False 
   resume_state: ~
@@ -97,7 +97,7 @@ train:
   lr_G: !!float 1e-4
   beta1: 0.9
   beta2: 0.5
-  niter: 250000
+  niter: 25
   warmup_iter: -1  # no warm up
 
   lr_scheme: MultiStepLR
