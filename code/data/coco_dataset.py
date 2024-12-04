@@ -54,7 +54,7 @@ class CoCoDataset(data.Dataset):
         GT_size = self.opt['GT_size']
         image_name = self.list_image[index]
         path_frame = os.path.join(self.data_path, image_name)
-        img_GT = util.read_img(None, osp.join(path_frame, path_frame))
+        img_GT = util.read_img(None, osp.join(path_frame))
         index_h = random.randint(0, len(self.list_image) - 1)
 
         # random crop
@@ -73,7 +73,7 @@ class CoCoDataset(data.Dataset):
             image_name_h = self.list_image[index_h]
             path_frame_h = os.path.join(self.data_path, image_name_h)
         
-        frame_h = util.read_img(None, osp.join(path_frame_h, path_frame_h))
+        frame_h = util.read_img(None, osp.join(path_frame_h))
         H1, W1, C1 = frame_h.shape
         rnd_h = random.randint(0, max(0, H1 - GT_size))
         rnd_w = random.randint(0, max(0, W1 - GT_size))
