@@ -53,6 +53,18 @@ class imageTestDataset(data.Dataset):
         list_h.append(imgs_LQ)
 
         list_h = torch.stack(list_h, dim=0)
+        
+        # use your own image
+        # image_path = "/home/lai/Research/Graduate/EditGuard/dataset/locwatermark/output.png"  # Path to your image file
+        # image = Image.open(image_path)
+        # result = np.array(image) / 255.0
+        # expanded_matrix = np.expand_dims(result, axis=0)  # Add batch dimension (1, H, W, C)
+        # expanded_matrix = np.repeat(expanded_matrix, T, axis=0)  # Repeat along batch dimension
+        # imgs_LQ = torch.from_numpy(np.ascontiguousarray(expanded_matrix)).float()
+        # imgs_LQ = imgs_LQ.permute(0, 3, 1, 2)  # Convert from (T, H, W, C) to (T, C, H, W)
+        # imgs_LQ = torch.nn.functional.interpolate(imgs_LQ, size=(H, W), mode='nearest')
+        # list_h.append(imgs_LQ)
+        # list_h = torch.stack(list_h, dim=0)  # Final stacked tensor
 
         return {
                 'LQ': list_h,
