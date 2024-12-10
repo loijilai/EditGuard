@@ -160,6 +160,7 @@ def main():
             train_sampler.set_epoch(epoch)
         for _, train_data in enumerate(train_loader):
             current_step += 1
+            print('epoch: ', epoch, 'total_epochs', total_epochs, 'current_step: ', current_step)
             if current_step > total_iters:
                 break
             # training
@@ -185,6 +186,7 @@ def main():
 
             # validation
             if current_step % opt['train']['val_freq'] == 0 and rank <= 0:
+                print('Start Validation')
                 avg_psnr = 0.0
                 avg_psnr_h = [0.0]*opt['num_image']
                 avg_psnr_lr = 0.0
