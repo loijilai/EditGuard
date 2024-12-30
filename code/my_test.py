@@ -11,6 +11,8 @@ from utils import util
 from data import create_dataloader, create_dataset
 
 from localization import Model_VSN
+import numpy as np
+import math
 
 
 def init_dist(backend='nccl', **kwargs):
@@ -31,6 +33,65 @@ def cal_pnsr(sr_img, gt_img):
     psnr = util.calculate_psnr(sr_img * 255, gt_img * 255)
 
     return psnr
+
+def calculate_psnr_roi(img1, img2, ratio=0.7):
+    # img1 and img2 are assumed to have the same dimensions
+    assert img1.shape == img2.shape, "Input images must have the same dimensions"
+    
+    height, width = img1.shape[:2]
+    
+    # Define the cropping boundaries
+    crop_height = int(ratio * height)
+    crop_width = int(ratio * width)
+    
+    start_y = (height - crop_height) // 2
+    start_x = (width - crop_width) // 2
+    end_y = start_y + crop_height
+    end_x = start_x + crop_width
+    
+    # Crop the middle region
+    img1_cropped = img1[start_y:end_y, start_x:end_x]
+    img2_cropped = img2[start_y:end_y, start_x:end_x]
+    
+    # Calculate MSE and PSNR for the cropped region
+    mse = np.mean((img1_cropped.astype(np.float64) - img2_cropped.astype(np.float64)) ** 2)
+    if mse == 0:
+        return float('inf')
+    
+    psnr = 20 * math.log10(255.0 / math.sqrt(mse))
+    return psnr
+
+def calculate_ssim_roi(img1, img2, ratio=0.7):
+    if not img1.shape == img2.shape:
+        raise ValueError('Input images must have the same dimensions.')
+
+    height, width = img1.shape[:2]
+
+    # Define cropping boundaries for the middle 70% region
+    crop_height = int(ratio * height)
+    crop_width = int(ratio * width)
+    start_y = (height - crop_height) // 2
+    start_x = (width - crop_width) // 2
+    end_y = start_y + crop_height
+    end_x = start_x + crop_width
+
+    # Crop the middle region
+    img1_cropped = img1[start_y:end_y, start_x:end_x]
+    img2_cropped = img2[start_y:end_y, start_x:end_x]
+
+    # Calculate SSIM for cropped region
+    if img1_cropped.ndim == 2:
+        return util.ssim(img1_cropped, img2_cropped)
+    elif img1_cropped.ndim == 3:
+        if img1_cropped.shape[2] == 3:
+            ssims = []
+            for i in range(3):
+                ssims.append(util.ssim(img1_cropped[..., i], img2_cropped[..., i]))
+            return np.array(ssims).mean()
+        elif img1_cropped.shape[2] == 1:
+            return util.ssim(np.squeeze(img1_cropped), np.squeeze(img2_cropped))
+    else:
+        raise ValueError('Wrong input image dimensions.')
 
 def get_min_avg_and_indices(nums):
     # Get the indices of the smallest 1000 elements
@@ -106,6 +167,9 @@ def main():
             
     # validation
     avg_psnr = 0.0
+    avg_psnr_roi = 0.0
+    avg_ssim = 0.0
+    avg_ssim_roi = 0.0
     avg_psnr_h = [0.0]*opt['num_image']
     avg_psnr_lr = 0.0
     biterr = []
@@ -125,6 +189,8 @@ def main():
 
         a = visuals['recmessage'][0]
         b = visuals['message'][0]
+        # print(visuals['message'].shape) # [1, 1, 64]
+        # print(visuals['recmessage'].shape) # [1, 1, 64]
 
         bitrecord = util.decoded_message_error_rate_batch(a, b)
         print(bitrecord)
@@ -161,17 +227,26 @@ def main():
                 util.save_img(lrgt_img[j], save_img_path)
 
             psnr = cal_pnsr(sr_img, gt_img)
+            ssim = util.calculate_ssim(sr_img, gt_img)
+            psnr_roi = calculate_psnr_roi(sr_img, gt_img)
+            ssim_roi = calculate_ssim_roi(sr_img, gt_img)
             psnr_h = []
             for j in range(n):
                 psnr_h.append(cal_pnsr(sr_img_h[j], lrgt_img[j]))
             psnr_lr = cal_pnsr(lr_img, gt_img)
 
             avg_psnr += psnr
+            avg_ssim += ssim
+            avg_psnr_roi += psnr_roi
+            avg_ssim_roi += ssim_roi
             for j in range(n):
                 avg_psnr_h[j] += psnr_h[j]
             avg_psnr_lr += psnr_lr
 
     avg_psnr = avg_psnr / idx
+    avg_ssim = avg_ssim / idx
+    avg_psnr_roi = avg_psnr_roi / idx
+    avg_ssim_roi = avg_ssim_roi / idx
     avg_biterr = sum(biterr) / len(biterr)
     print(get_min_avg_and_indices(biterr))
 
@@ -180,7 +255,8 @@ def main():
     res_psnr_h = ''
     for p in avg_psnr_h:
         res_psnr_h+=('_{:.4e}'.format(p))
-    print('# Validation # PSNR_Cover: {:.4e}, PSNR_Secret: {:s}, PSNR_Stego: {:.4e},  Bit_Error: {:.4e}'.format(avg_psnr, res_psnr_h, avg_psnr_lr, avg_biterr))
+    print('# Validation # PSNR_Cover: {:.4e}, SSIM_Cover: {:.4e}, PSNR_Secret: {:s}, PSNR_Stego: {:.4e},  Bit_Error: {:.4e}'.format(avg_psnr, avg_ssim, res_psnr_h, avg_psnr_lr, avg_biterr))
+    print('# Validation # PSNR_ROI: {:.4e}, SSIM_ROI: {:.4e}'.format(avg_psnr_roi, avg_ssim_roi))
 
 
 if __name__ == '__main__':
