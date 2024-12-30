@@ -110,18 +110,17 @@ class VSN(nn.Module):
                 out_y, out_y_h = self.irn(x, x_h, rev)
                 out_y = iwt(out_y)
                 # encoded_image = self.bitencoder(out_y, message)          
+                # print("out_y", out_y.shape) # torch.Size([1, 3, 512, 512])
+                # print(out_y.min(), out_y.max()) # [0, 1]
+
+                
                 encoded_image = out_y
                 return out_y, encoded_image
             
-            elif self.mode == "bit":
-                out_y = iwt(x)
-                encoded_image = self.bitencoder(out_y, message)            
-                return out_y, encoded_image
-
         else:
             if self.mode == "image":
                 # recmessage = self.bitdecoder(x)
-                recmessage = torch.Tensor(np.random.choice([-0.5, 0.5], (1, 64))).to('cuda')
+                recmessage = torch.Tensor(np.random.choice([-0.5, 0.5], (1, self.message_len))).to('cuda')
 
                 x = dwt(x)
                 out_z = self.pm(x).unsqueeze(1)
@@ -131,10 +130,6 @@ class VSN(nn.Module):
 
                 return out_x, out_x_h, out_z, recmessage
             
-            elif self.mode == "bit":
-                recmessage = self.bitdecoder(x)
-                return recmessage
-
 def define_G_v2(opt):
     opt_net = opt['network_G']
     which_model = opt_net['which_model_G']
@@ -290,7 +285,7 @@ class Model_VSN(BaseModel):
         else:
             self.netG = DataParallel(self.netG)
         # print network
-        self.print_network()
+        # self.print_network()
         self.load()
 
         self.Quantization = Quantization()
@@ -580,7 +575,14 @@ class Model_VSN(BaseModel):
             # forward downscaling
             self.host = self.real_H[:, center - intval+id:center + intval + 1+id]
             self.secret = self.ref_L[:, :, center - intval+id:center + intval + 1+id]
-            self.secret = [dwt(self.secret[:,i].reshape(b, -1, h, w)) for i in range(n)]
+            # print(self.host.shape) # torch.Size([1, 1, 3, 512, 512])
+            # print(self.secret.shape) # torch.Size([1, 1, 1, 3, 512, 512])
+            self.secret = [self.secret[:,i].reshape(b, -1, h, w) for i in range(n)]
+            # print(self.secret[0].shape) # torch.Size([1, 3, 512, 512])
+            # print("Range of secret", self.secret[0].min(), self.secret[0].max())
+            self.secret = [dwt(self.secret[i]) for i in range(n)]
+            # print(self.secret[0].shape) # torch.Size([1, 12, 256, 256])
+            # print("Range of secret after dwt", self.secret[0].min(), self.secret[0].max())
 
             messagenp = np.random.choice([-0.5, 0.5], (self.ref_L.shape[0], self.opt['message_length']))
 
