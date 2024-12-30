@@ -839,6 +839,9 @@ class Model_VSN(BaseModel):
                 out_x = out_x.reshape(-1, self.gop, 3, h, w)
                 out_x_h = torch.stack(out_x_h, dim=1)
                 out_x_h = out_x_h.reshape(-1, 1, self.gop, 3, h, w)
+                # 測試能不能直接從template中decode出bitstream
+                # print(out_x_h.shape) # [1, 1, 1, 3, 512, 512]
+                # decode_hidden(out_x_h[0,0])
 
                 forw_L.append(y_forw)
                 fake_H.append(out_x[:, self.gop//2])
