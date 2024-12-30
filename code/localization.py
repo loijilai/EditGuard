@@ -17,6 +17,9 @@ from models.modules.Quantization import Quantization
 from models.modules.loss import ReconstructionLoss, ReconstructionMsgLoss
 import models.lr_scheduler as lr_scheduler
 
+# for robust method
+from robust_method import robust_hidden, decode_hidden
+
 def dwt_init(x):
 
     x01 = x[:, :, 0::2, :] / 2
@@ -806,6 +809,22 @@ class Model_VSN(BaseModel):
 
                     y_forw = torch.clamp(noisy_img_tensor, 0, 1)
 
+            # Test localization for inpainting
+            # import random
+            # massive_inpaint_ratio = 0.05
+            # b, c, h, w = y_forw.shape
+            # modified_h = int(h * massive_inpaint_ratio)
+            # modified_w = int(w * massive_inpaint_ratio)
+            # # sample the upper-left corner of the modified area
+            # random_h = random.randint(0, h - modified_h)
+            # random_w = random.randint(0, w - modified_w)
+            # y_forw[:, :, random_h:random_h + modified_h, random_w:random_w + modified_w] = 0
+
+            # TODO: 要在這裡改成其他robust watermarking的方法
+            # 記得同時要改line 844 recmessage要丟掉
+            encoded_image, recmessage = robust_hidden(y_forw, message)
+            y_forw = encoded_image
+
             # backward upscaling
             if self.opt['hide']:
                 y = self.Quantization(y_forw)
@@ -813,7 +832,7 @@ class Model_VSN(BaseModel):
                 y = y_forw
 
             if self.mode == "image":
-                out_x, out_x_h, out_z, recmessage = self.netG(x=y, rev=True)
+                out_x, out_x_h, out_z, _ = self.netG(x=y, rev=True)
                 out_x = iwt(out_x)
 
                 out_x_h = [iwt(out_x_h_i) for out_x_h_i in out_x_h]
