@@ -19,6 +19,7 @@ sdinpaint: False
 controlnetinpaint: False
 sdxl: False
 repaint: False
+test_robust: False
 
 hide: True
 hidebit: True

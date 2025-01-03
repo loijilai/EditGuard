@@ -820,10 +820,10 @@ class Model_VSN(BaseModel):
             # random_w = random.randint(0, w - modified_w)
             # y_forw[:, :, random_h:random_h + modified_h, random_w:random_w + modified_w] = 0
 
-            # TODO: 要在這裡改成其他robust watermarking的方法
-            # 記得同時要改line 844 recmessage要丟掉
-            encoded_image, recmessage = robust_hidden(y_forw, message)
-            y_forw = encoded_image
+            # 在這裡改成其他robust watermarking的方法
+            if test_robust:
+                encoded_image, recmessage = robust_hidden(y_forw, message)
+                y_forw = encoded_image
 
             # backward upscaling
             if self.opt['hide']:
@@ -832,7 +832,11 @@ class Model_VSN(BaseModel):
                 y = y_forw
 
             if self.mode == "image":
-                out_x, out_x_h, out_z, _ = self.netG(x=y, rev=True)
+                if test_robust:
+                    out_x, out_x_h, out_z, _ = self.netG(x=y, rev=True)
+                else:
+                    out_x, out_x_h, out_z, recmessage = self.netG(x=y, rev=True)
+
                 out_x = iwt(out_x)
 
                 out_x_h = [iwt(out_x_h_i) for out_x_h_i in out_x_h]
