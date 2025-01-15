@@ -20,6 +20,9 @@ import models.lr_scheduler as lr_scheduler
 # for robust method
 from robust_method import robust_hidden, decode_hidden
 
+# for debugging
+from torchvision.utils import save_image
+
 def dwt_init(x):
 
     x01 = x[:, :, 0::2, :] / 2
@@ -96,8 +99,8 @@ class VSN(nn.Module):
         self.block_num_trans = opt_net['block_num_trans']
         self.nf = self.channel_in_hi 
         
-        # self.bitencoder = DW_Encoder(self.message_len, attention = "se")
-        # self.bitdecoder = DW_Decoder(self.message_len, attention = "se")
+        self.bitencoder = DW_Encoder(self.message_len, attention = "se")
+        self.bitdecoder = DW_Decoder(self.message_len, attention = "se")
         self.irn = InvNN(self.channel_in_ho, self.channel_in_hi, subnet_constructor, subnet_constructor_v2, self.block_num, down_num, groups=self.num_image)
 
         if opt['prompt']:
@@ -109,6 +112,9 @@ class VSN(nn.Module):
 
     def forward(self, x, x_h=None, message=None, rev=False, hs=[], direction='f'):
         if not rev:
+            # 我這邊意義跟原始paper不同
+            # 原本先train bit mode，再train image mode時，會用到bit mode的encoder
+            # 現在先train image mode，再train bit mode時，會用到image INN
             if self.mode == "image":
                 out_y, out_y_h = self.irn(x, x_h, rev)
                 out_y = iwt(out_y)
@@ -119,6 +125,31 @@ class VSN(nn.Module):
                 
                 encoded_image = out_y
                 return out_y, encoded_image
+            elif self.mode == "bit":
+                original_image = iwt(x)
+                encoded_image = self.bitencoder(original_image, message)            
+
+                ######### ROI start #########
+                # remove_ratio = 0.7 # this is ROI
+
+                # center_size = int(512 * remove_ratio)
+                # start_x = (512 - center_size) // 2
+                # start_y = start_x
+
+                # clear_center = original_image[:, :, start_x:start_x + center_size, start_y:start_y + center_size]
+
+                # encoded_image[:, :, start_x:start_x + center_size, start_y:start_y + center_size] = clear_center
+                ######### ROI end #########
+
+                out_y, out_y_h = self.irn(dwt(encoded_image), x_h, rev)
+                out_y = iwt(out_y)
+                # print("encoded_image", encoded_image.shape) # torch.Size([1, 3, 512, 512])
+                # print("out_y", out_y.shape)  # torch.Size([1, 3, 512, 512])
+                # save_image(iwt(x), "gt.png")
+                # save_image(iwt(x_h[0]), "se.png")
+                # save_image(encoded_image, "rb.png")
+                # save_image(out_y, "rbfg.png")
+                return encoded_image, out_y
             
         else:
             if self.mode == "image":
@@ -132,6 +163,20 @@ class VSN(nn.Module):
                 out_x, out_x_h = self.irn(x, out_z_new, rev)
 
                 return out_x, out_x_h, out_z, recmessage
+            
+            elif self.mode == "bit":
+                # 這邊INN inverse得到out_x, out_x_h不一定要做，但是為了debug我還是做了
+                # save_image(x, "rbfg_protected.png")
+                recmessage = self.bitdecoder(x)
+
+                x = dwt(x)
+                out_z = self.pm(x).unsqueeze(1)
+                out_z_new = out_z.view(-1, self.num_image, self.channel_in, x.shape[-2], x.shape[-1])
+                out_z_new = [out_z_new[:,i] for i in range(self.num_image)]
+                out_x, out_x_h = self.irn(x, out_z_new, rev)
+                # save_image(iwt(out_x), "cover_rec.png")
+                # save_image(iwt(out_x_h[0]), "secret_rec.png")
+                return out_x, out_x_h, recmessage
             
 def define_G_v2(opt):
     opt_net = opt['network_G']
@@ -226,12 +271,28 @@ class BaseModel():
         torch.save(state_dict, save_path)
 
     def load_network(self, load_path, network, strict=True):
+        print('Loading model for G [{:s}] ...'.format(load_path))
         if isinstance(network, nn.DataParallel) or isinstance(network, DistributedDataParallel):
             network = network.module
         load_net = torch.load(load_path)
         load_net_clean = OrderedDict()  # remove unnecessary 'module.'
         for k, v in load_net.items():
             if k.startswith('bitencoder.') or k.startswith('bitdecoder.'):
+                continue
+            if k.startswith('module.'):
+                load_net_clean[k[7:]] = v
+            else:
+                load_net_clean[k] = v
+        network.load_state_dict(load_net_clean, strict=strict)
+
+    def load_bit_network(self, load_path, network, strict=True):
+        print('Loading model for G [{:s}] ...'.format(load_path))
+        if isinstance(network, nn.DataParallel) or isinstance(network, DistributedDataParallel):
+            network = network.module
+        load_net = torch.load(load_path)
+        load_net_clean = OrderedDict()  # remove unnecessary 'module.'
+        for k, v in load_net.items():
+            if k.startswith('irn.') or k.startswith('pm.'):
                 continue
             if k.startswith('module.'):
                 load_net_clean[k[7:]] = v
@@ -438,7 +499,11 @@ class Model_VSN(BaseModel):
 
         y_forw = container
 
-        l_forw_fit = self.loss_forward(y_forw, self.host[:,0])
+        if self.mode == "image":
+            l_forw_fit = self.loss_forward(y_forw, self.host[:,0])
+        elif self.mode == "bit":
+            # 注意這裡應該要是self.output因為INN的output不用計算loss
+            l_forw_fit = self.loss_forward(self.output, self.host[:,0])
 
 
         if degrade_shuffle:
@@ -529,7 +594,7 @@ class Model_VSN(BaseModel):
             self.optimizer_G.step()
 
         elif self.mode == "bit":
-            recmessage = self.netG(x=y, message=all_zero, rev=True)
+            out_x, out_x_h, recmessage = self.netG(x=y, message=all_zero, rev=True)
 
             recmessage = torch.clamp(recmessage, -0.5, 0.5)
 
@@ -561,6 +626,7 @@ class Model_VSN(BaseModel):
         add_sdxl = self.opt['sdxl']
         add_repaint = self.opt['repaint']
         degrade_shuffle = self.opt['degrade_shuffle']
+        test_robust = self.opt['test_robust']
 
         with torch.no_grad():
             forw_L = []
@@ -609,6 +675,13 @@ class Model_VSN(BaseModel):
 
             if self.opt['hide']:
                 self.output, container = self.netG(x=dwt(self.host.reshape(b, -1, h, w)), x_h=self.secret, message=message)
+                # for visualization
+                forw_L = []
+                msglist = []
+                recmsglist = []
+                forw_L.append(container)
+                self.forw_L = torch.clamp(torch.stack(forw_L, dim=1),0,1)
+                self.rb_img = self.output
                 y_forw = container
             else:
                 
@@ -854,7 +927,23 @@ class Model_VSN(BaseModel):
                 msglist.append(message)
             
             elif self.mode == "bit":
-                recmessage = self.netG(x=y, rev=True)
+                # for visualization
+                fake_H = []
+                fake_H_h = []
+                out_x, out_x_h, recmessage = self.netG(x=y, rev=True)
+                out_x = iwt(out_x)
+
+                out_x_h = [iwt(out_x_h_i) for out_x_h_i in out_x_h]
+                out_x = out_x.reshape(-1, self.gop, 3, h, w)
+                out_x_h = torch.stack(out_x_h, dim=1)
+                out_x_h = out_x_h.reshape(-1, 1, self.gop, 3, h, w)
+
+                fake_H.append(out_x[:, self.gop//2])
+                fake_H_h.append(out_x_h[:,:, self.gop//2])
+                self.fake_H = torch.clamp(torch.stack(fake_H, dim=1),0,1)
+                self.fake_H_h = torch.clamp(torch.stack(fake_H_h, dim=2),0,1) 
+
+
                 forw_L.append(y_forw)
                 recmsglist.append(recmessage)
                 msglist.append(message)
@@ -966,6 +1055,12 @@ class Model_VSN(BaseModel):
             SR_h = self.fake_H_h.detach()[0].float().cpu()
             SR_h = torch.chunk(SR_h, self.num_image, dim=0)
             out_dict['SR_h'] = [image.squeeze(0) for image in SR_h]
+        elif self.mode == "bit":
+            out_dict['SR'] = self.fake_H.detach()[0].float().cpu()
+            SR_h = self.fake_H_h.detach()[0].float().cpu()
+            SR_h = torch.chunk(SR_h, self.num_image, dim=0)
+            out_dict['SR_h'] = [image.squeeze(0) for image in SR_h]
+            out_dict['RB'] = self.rb_img.detach().float().cpu()
         
         out_dict['LR'] = self.forw_L.detach()[0].float().cpu()
         out_dict['GT'] = self.real_H[:, center - intval:center + intval + 1].detach()[0].float().cpu()
@@ -988,11 +1083,15 @@ class Model_VSN(BaseModel):
     def load(self):
         load_path_G = self.opt['path']['pretrain_model_G']
         if load_path_G is not None:
-            logger.info('Loading model for G [{:s}] ...'.format(load_path_G))
             self.load_network(load_path_G, self.netG, self.opt['path']['strict_load'])
+        else:
+            print('Pre-trained model not found, initialize model from scratch.')
     
     def load_test(self,load_path_G):
         self.load_network(load_path_G, self.netG, self.opt['path']['strict_load'])
+    
+    def load_test_bit(self,load_path_G):
+        self.load_bit_network(load_path_G, self.netG, self.opt['path']['strict_load'])
 
     def save(self, iter_label):
         self.save_network(self.netG, 'G', iter_label)
